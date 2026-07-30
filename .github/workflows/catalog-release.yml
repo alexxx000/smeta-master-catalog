@@ -41,10 +41,30 @@ jobs:
             cp previous/latest.json latest.json
           fi
 
+      - name: Download official source snapshots
+        run: |
+          # The Rosstat server currently sends an incomplete TLS chain to Node/OpenSSL.
+          # --insecure is deliberately scoped to these public source snapshots; strict
+          # schema, coverage, code/unit and price validation still gates publication.
+          curl --fail --location --retry 5 --insecure \
+            --output rosstat-price.html \
+            https://rosstat.gov.ru/statistics/price
+          ROSSTAT_URL="$(npx tsx -e "import fs from 'node:fs'; import { discoverRosstatWorkbook } from './src/rosstat.ts'; console.log(discoverRosstatWorkbook(fs.readFileSync('rosstat-price.html','utf8')))")"
+          curl --fail --location --retry 5 --insecure \
+            --output rosstat-materialy.xlsx \
+            "$ROSSTAT_URL"
+          curl --fail --location --retry 5 \
+            --output emiss-37055.csv.gz \
+            https://storage.yandexcloud.net/datalakeiepru-s3-storage-public/fedstatru/csv/37055.csv.gz
+
       - name: Build package from official sources
         env:
           RELEASE_PERIOD: ${{ inputs.release_period }}
+          ROSSTAT_PAGE_FILE: rosstat-price.html
+          ROSSTAT_WORKBOOK_FILE: rosstat-materialy.xlsx
+          EMISS_CSV_FILE: emiss-37055.csv.gz
         run: |
+          set -o pipefail
           if [ -z "$RELEASE_PERIOD" ]; then
             export RELEASE_PERIOD="$(date -u +%Y-%m)"
           fi
