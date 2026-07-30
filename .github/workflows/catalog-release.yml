@@ -1,0 +1,82 @@
+name: Build and publish catalog
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_period:
+        description: "Период выпуска YYYY-MM (по умолчанию текущий месяц UTC)"
+        required: false
+        type: string
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: catalog-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+
+      - name: Download previous manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p previous
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir previous; then
+            cp previous/latest.json latest.json
+          fi
+
+      - name: Build package from official sources
+        env:
+          RELEASE_PERIOD: ${{ inputs.release_period }}
+        run: |
+          if [ -z "$RELEASE_PERIOD" ]; then
+            export RELEASE_PERIOD="$(date -u +%Y-%m)"
+          fi
+          npm run catalog:build | tee catalog-build-summary.json
+
+      - name: Decide whether data changed
+        id: changed
+        run: |
+          NEW_SHA="$(node -p "require('./dist/catalog/latest.json').sha256")"
+          OLD_SHA=""
+          if [ -f previous/latest.json ]; then
+            OLD_SHA="$(node -p "require('./previous/latest.json').sha256")"
+          fi
+          if [ "$NEW_SHA" = "$OLD_SHA" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Source payload is unchanged; release is skipped."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish GitHub Release
+        if: steps.changed.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(node -p "require('./dist/catalog/latest.json').catalogVersion")"
+          PERIOD="$(node -p "require('./dist/catalog/latest.json').catalogPeriod")"
+          ASSET="dist/catalog/catalog-${VERSION}.json.gz"
+          gh release create "catalog-${VERSION}" \
+            "$ASSET" \
+            "dist/catalog/latest.json" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Каталог ${PERIOD}, ревизия ${VERSION##*-r}" \
+            --notes-file catalog-build-summary.json \
+            --latest
