@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+rosstat-price.html
+rosstat-materialy.xlsx
+emiss-37055.csv.gz
+embedded-material-catalog.json
